@@ -1,6 +1,48 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+// --- YARDIMCI SIKIŞTIRMA FONKSİYONU (Bileşen Dışında Tanımlandı) ---
+const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.6) => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target.result;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let width = img.width;
+                let height = img.height;
+
+                // En-boy oranını koruyarak maksimum sınırları belirle
+                if (width > height) {
+                    if (width > maxWidth) {
+                        height = Math.round((height * maxWidth) / width);
+                        width = maxWidth;
+                    }
+                } else {
+                    if (height > maxHeight) {
+                        width = Math.round((width * maxHeight) / height);
+                        height = maxHeight;
+                    }
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                // PNG veya ağır formatları hafif JPEG'e dönüştürerek kalitesini ayarla
+                const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+                resolve(compressedBase64);
+            };
+            img.onerror = (error) => reject(error);
+        };
+        reader.onerror = (error) => reject(error);
+    });
+};
+
 const Admin = () => {
     const [activeTab, setActiveTab] = useState('events');
     const [events, setEvents] = useState([]);
@@ -27,20 +69,25 @@ const Admin = () => {
         setApps(JSON.parse(localStorage.getItem('media_applications') || '[]'));
     }, [navigate]);
 
-    // --- FOTOĞRAF YÜKLEME ---
-    const handleImageUpload = (e, target) => {
+    // --- FOTOĞRAF YÜKLEME (ASENKRON VE SIKIŞTIRILMIŞ) ---
+    const handleImageUpload = async (e, target) => {
         const files = Array.from(e.target.files);
-        files.forEach(file => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
+
+        // Çoklu dosya yüklemelerinde sırayla sıkıştırma işlemi yapar
+        for (const file of files) {
+            try {
+                // Resmi 800x800 ve 0.6 (yani %60 kalite) olacak şekilde sıkıştırıyoruz
+                const compressedBase64 = await compressImage(file, 800, 800, 0.6);
+
                 if (target === 'event') {
-                    setNewEvent(prev => ({ ...prev, images: [...prev.images, reader.result] }));
+                    setNewEvent(prev => ({ ...prev, images: [...prev.images, compressedBase64] }));
                 } else if (target === 'member') {
-                    setNewMember(prev => ({ ...prev, image: reader.result }));
+                    setNewMember(prev => ({ ...prev, image: compressedBase64 }));
                 }
-            };
-            reader.readAsDataURL(file);
-        });
+            } catch (error) {
+                console.error("Resim işlenirken ve sıkıştırılırken bir hata oluştu:", error);
+            }
+        }
     };
 
     // --- ETKİNLİK YÖNETİMİ ---
@@ -133,7 +180,7 @@ const Admin = () => {
                         {events.map(ev => (
                             <div key={ev.id} className="flex justify-between items-center p-6 bg-white dark:bg-dark-card rounded-[2.5rem] border border-slate-100 dark:border-white/5 transition-colors shadow-sm">
                                 <div className="flex items-center gap-6">
-                                    <div className="w-16 h-16 rounded-2xl overflow-hidden bg-canvas flex items-center justify-center text-2xl transition-colors">{ev.images[0] ? <img src={ev.images[0]} className="w-full h-full object-cover" /> : ev.icon}</div>
+                                    <div className="w-16 h-16 rounded-2xl overflow-hidden bg-canvas flex items-center justify-center text-2xl transition-colors">{ev.images && ev.images[0] ? <img src={ev.images[0]} className="w-full h-full object-cover" /> : ev.icon}</div>
                                     <div><h4 className="font-bold text-lg dark:text-white leading-tight transition-colors">{ev.title}</h4><p className="text-sm text-slate-400">{ev.date}</p></div>
                                 </div>
                                 <div className="flex gap-2">

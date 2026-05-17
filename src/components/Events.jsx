@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+// --- BULUT BAĞLANTISINI EKLEDİK ---
+import { db } from '../firebase'; // firebase.js src klasöründe olduğu için yol aynı kaldı
+import { collection, getDocs, query, orderBy } from 'firebase/firestore';
 
-// Kart içindeki Mini Slider Bileşeni
+// Kart içindeki Mini Slider Bileşeni (Aynen Korundu)
 const ImageSlider = ({ images, title }) => {
     const [index, setIndex] = useState(0);
 
@@ -29,7 +32,7 @@ const ImageSlider = ({ images, title }) => {
                     className="absolute inset-0 w-full h-full object-cover"
                 />
             </AnimatePresence>
-            
+
             {/* Alt taraftaki noktalar (dots) */}
             {images.length > 1 && (
                 <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
@@ -45,9 +48,27 @@ const ImageSlider = ({ images, title }) => {
 const Events = () => {
     const [events, setEvents] = useState([]);
 
+    // --- BULUTTAN ETKİNLİKLERİ ÇEKEN YENİ YAPI ---
     useEffect(() => {
-        const savedEvents = JSON.parse(localStorage.getItem('media_events') || '[]');
-        setEvents(savedEvents);
+        const fetchEvents = async () => {
+            try {
+                // Etkinlikleri buluttan oluşturulma tarihine göre (en yeni en üstte) sıralayarak çekiyoruz
+                const q = query(collection(db, 'events'), orderBy('createdAt', 'desc'));
+                const querySnapshot = await getDocs(q);
+
+                // Gelen dökümanları id'leriyle birlikte diziye dönüştürüyoruz
+                const eventsList = querySnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+                setEvents(eventsList);
+            } catch (error) {
+                console.error("Etkinlikler buluttan çekilirken hata oluştu:", error);
+            }
+        };
+
+        fetchEvents();
     }, []);
 
     return (

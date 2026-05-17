@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-// --- FIREBASE BAĞLANTISINI EKLEDİK ---
-import { db } from '../firebase'; // Eğer firebase.js ile aynı klasördeyse './firebase' yapabilirsin
+import { db } from '../firebase';
 import { collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
 
-// --- RESİM SIKIŞTIRMA MOTORU (Aynen Korundu) ---
 const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.6) => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -24,7 +22,7 @@ const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.6) => 
                     }
                 } else {
                     if (height > maxHeight) {
-                        width = Math.round((height * maxHeight) / height);
+                        width = Math.round((width * maxHeight) / height);
                         height = maxHeight;
                     }
                 }
@@ -45,36 +43,35 @@ const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.6) => 
 };
 
 const Admin = () => {
-    const [activeTab, setActiveTab] = useState('events');
+    const [activeTab, useStateActive] = useState('events');
+    const [activeTabState, setActiveTab] = [activeTab, useStateActive];
     const [events, setEvents] = useState([]);
     const [team, setTeam] = useState([]);
     const [apps, setApps] = useState([]);
 
-    // Düzenleme modları (Firestore ID'leri string olduğu için null veya string tutacak)
     const [editingEventId, setEditingEventId] = useState(null);
     const [editingMemberId, setEditingMemberId] = useState(null);
 
     const navigate = useNavigate();
 
-    // Form Taslakları
     const emptyEvent = { title: '', date: '', desc: '', status: 'Yaklaşan', icon: '🎙️', tag: 'Konferans', formUrl: '', images: [] };
     const emptyMember = { name: '', role: '', linkedin: '', image: '' };
 
     const [newEvent, setNewEvent] = useState(emptyEvent);
     const [newMember, setNewMember] = useState(emptyMember);
 
-    // --- BULUTTAN VERİLERİ ÇEKEN FONKSİYONLAR ---
     const fetchFirebaseData = async () => {
         try {
-            // 1. Etkinlikleri Tarihe Göre Sıralı Çek
+            // 1. Etkinlikleri Çek
             const eventsQuery = query(collection(db, 'events'), orderBy('createdAt', 'desc'));
             const eventsSnapshot = await getDocs(eventsQuery);
             const eventsList = eventsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setEvents(eventsList);
 
-            // 2. Ekip Üyelerini Çek
+            // 2. Ekip Üyelerini Çek ve 'order' alanına göre sırala (Yoksa 0 kabul et)
             const teamSnapshot = await getDocs(collection(db, 'team'));
-            const teamList = teamSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const teamList = teamSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
             setTeam(teamList);
 
             // 3. Başvuruları Çek
@@ -82,16 +79,15 @@ const Admin = () => {
             const appsList = appsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setApps(appsList);
         } catch (error) {
-            console.error("Veriler buluttan yüklenirken hata oluştu:", error);
+            console.error("Veriler yüklenirken hata:", error);
         }
     };
 
     useEffect(() => {
         if (localStorage.getItem('isAdmin') !== 'true') navigate('/login');
-        fetchFirebaseData(); // Sayfa açılınca verileri Firebase'den çekiyoruz
+        fetchFirebaseData();
     }, [navigate]);
 
-    // --- FOTOĞRAF YÜKLEME VE SIKIŞTIRMA (Aynen Korundu) ---
     const handleImageUpload = async (e, target) => {
         const files = Array.from(e.target.files);
         for (const file of files) {
@@ -108,27 +104,54 @@ const Admin = () => {
         }
     };
 
-    // --- ETKİNLİK YÖNETİMİ (YENİ ASENKRON FİREBASE YAPISI) ---
+    // --- SÜRÜKLE BIRAK SÜREÇLERİ ---
+    const handleDragStart = (e, index) => {
+        e.dataTransfer.setData('text/plain', index);
+    };
+
+    const handleDragOver = (e) => {
+        e.preventDefault(); // Drop tetiklenmesi için zorunlu
+    };
+
+    const handleDrop = async (e, targetIndex) => {
+        const sourceIndex = Number(e.dataTransfer.getData('text/plain'));
+        if (sourceIndex === targetIndex) return;
+
+        const reorderedTeam = [...team];
+        const [removed] = reorderedTeam.splice(sourceIndex, 1);
+        reorderedTeam.splice(targetIndex, 0, removed);
+
+        // Arayüzün hızlı tepki vermesi için state'i hemen güncelliyoruz
+        setTeam(reorderedTeam);
+
+        // Firebase'de yeni sıra numaralarını (order) güncelle
+        try {
+            for (let i = 0; i < reorderedTeam.length; i++) {
+                const member = reorderedTeam[i];
+                const memberDocRef = doc(db, 'team', member.id);
+                await updateDoc(memberDocRef, { order: i });
+            }
+            console.log("Yeni sıralama buluta işlendi!");
+        } catch (error) {
+            console.error("Sıralama güncellenirken hata oluştu:", error);
+        }
+    };
+
+    // --- ETKİNLİK KAYDET ---
     const saveEvent = async (e) => {
         e.preventDefault();
         try {
             if (editingEventId) {
-                // Güncelleme Modu
                 const eventDocRef = doc(db, 'events', editingEventId);
                 await updateDoc(eventDocRef, newEvent);
                 setEditingEventId(null);
             } else {
-                // Yeni Ekleme Modu (Oluşturulma tarihini otomatik ekliyoruz)
-                await addDoc(collection(db, 'events'), {
-                    ...newEvent,
-                    createdAt: Date.now()
-                });
+                await addDoc(collection(db, 'events'), { ...newEvent, createdAt: Date.now() });
             }
             setNewEvent(emptyEvent);
-            fetchFirebaseData(); // Listeyi güncelle
-            alert("Etkinlik başarıyla buluta kaydedildi!");
+            fetchFirebaseData();
+            alert("Etkinlik kaydedildi!");
         } catch (error) {
-            alert("Etkinlik kaydedilirken bir hata oluştu.");
             console.error(error);
         }
     };
@@ -137,34 +160,34 @@ const Admin = () => {
         if (window.confirm("Bu etkinliği silmek istediğine emin misin?")) {
             try {
                 await deleteDoc(doc(db, 'events', id));
-                fetchFirebaseData(); // Listeyi güncelle
+                fetchFirebaseData();
             } catch (error) {
-                console.error("Silme hatası:", error);
+                console.error(error);
             }
         }
     };
 
-    // --- EKİP YÖNETİMİ (YENİ ASENKRON FİREBASE YAPISI) ---
+    // --- EKİP KAYDET ---
     const saveMember = async (e) => {
         e.preventDefault();
         try {
             if (editingMemberId) {
-                // Güncelleme Modu
                 const memberDocRef = doc(db, 'team', editingMemberId);
                 await updateDoc(memberDocRef, newMember);
                 setEditingMemberId(null);
             } else {
-                // Yeni Ekleme Modu
+                // Yeni eklenen kişiyi listenin en sonuna atmak için order: team.length veriyoruz
                 await addDoc(collection(db, 'team'), {
                     ...newMember,
+                    order: team.length,
                     createdAt: Date.now()
                 });
             }
             setNewMember(emptyMember);
-            fetchFirebaseData(); // Listeyi güncelle
-            alert("Ekip üyesi başarıyla buluta kaydedildi!");
+            fetchFirebaseData();
+            alert("Ekip üyesi kaydedildi!");
         } catch (error) {
-            alert("Üye kaydedilirken hata oluştu.");
+            console.error(error);
         }
     };
 
@@ -179,7 +202,6 @@ const Admin = () => {
         }
     };
 
-    // --- BAŞVURU SİLME ---
     const deleteApp = async (id) => {
         if (window.confirm("Bu başvuruyu silmek istediğine emin misin?")) {
             try {
@@ -202,9 +224,9 @@ const Admin = () => {
             <div className="flex flex-col md:flex-row justify-between items-center mb-12 gap-6">
                 <h2 className="text-4xl font-black dark:text-white tracking-tighter transition-colors">Yönetim Paneli</h2>
                 <div className="flex bg-canvas dark:bg-dark-bg p-1.5 rounded-2xl border border-slate-100 dark:border-white/5 transition-colors">
-                    <button onClick={() => setActiveTab('events')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'events' ? 'bg-white dark:bg-slate-800 shadow-sm text-media-light' : 'text-slate-400'}`}>Etkinlikler</button>
-                    <button onClick={() => setActiveTab('team')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'team' ? 'bg-white dark:bg-slate-800 shadow-sm text-media-light' : 'text-slate-400'}`}>Ekibimiz</button>
-                    <button onClick={() => setActiveTab('apps')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'apps' ? 'bg-white dark:bg-slate-800 shadow-sm text-media-light' : 'text-slate-400'}`}>Başvurular ({apps.length})</button>
+                    <button onClick={() => useStateActive('events')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'events' ? 'bg-white dark:bg-slate-800 shadow-sm text-media-light' : 'text-slate-400'}`}>Etkinlikler</button>
+                    <button onClick={() => useStateActive('team')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'team' ? 'bg-white dark:bg-slate-800 shadow-sm text-media-light' : 'text-slate-400'}`}>Ekibimiz</button>
+                    <button onClick={() => useStateActive('apps')} className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'apps' ? 'bg-white dark:bg-slate-800 shadow-sm text-media-light' : 'text-slate-400'}`}>Başvurular ({apps.length})</button>
                 </div>
                 <button onClick={logout} className="px-6 py-2 bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white rounded-xl font-bold text-sm transition-all">Çıkış Yap</button>
             </div>
@@ -246,7 +268,7 @@ const Admin = () => {
                 </div>
             )}
 
-            {/* --- EKİP SEKMESİ --- */}
+            {/* --- EKİP SEKMESİ (SÜRÜKLENEBİLİR YAPILDI) --- */}
             {activeTab === 'team' && (
                 <div className="animate-fadeIn">
                     <form onSubmit={saveMember} className="bg-white dark:bg-dark-card p-8 rounded-[2.5rem] shadow-sm grid md:grid-cols-2 gap-6 border border-slate-100 dark:border-white/5 mb-16 transition-colors">
@@ -261,16 +283,28 @@ const Admin = () => {
                         <button className={`md:col-span-2 py-5 text-white rounded-[1.5rem] font-bold shadow-xl transition-all ${editingMemberId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-media-navy hover:opacity-90'}`}>{editingMemberId ? "Bilgileri Güncelle" : "Üyeyi Ekle"}</button>
                     </form>
 
+                    <p className="text-xs font-bold text-slate-400 mb-4 px-2 uppercase tracking-wider">💡 İpucu: Üyeleri sıralamak için kartları tutup aşağı/yukarı sürükleyebilirsiniz.</p>
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {team.map(member => (
-                            <div key={member.id} className="flex justify-between items-center p-6 bg-white dark:bg-dark-card rounded-[2.5rem] border border-slate-100 dark:border-white/5 transition-colors shadow-sm">
-                                <div className="flex items-center gap-6">
-                                    <img src={member.image || 'https://via.placeholder.com/150'} className="w-16 h-16 rounded-full object-cover border-2 border-media-light/10 transition-colors" />
-                                    <div><h4 className="font-bold text-lg dark:text-white leading-tight transition-colors">{member.name}</h4><p className="text-sm font-bold text-media-light uppercase transition-colors">{member.role}</p></div>
+                        {team.map((member, index) => (
+                            <div
+                                key={member.id}
+                                draggable
+                                onDragStart={(e) => handleDragStart(e, index)}
+                                onDragOver={handleDragOver}
+                                onDrop={(e) => handleDrop(e, index)}
+                                className="cursor-move active:scale-95 flex justify-between items-center p-6 bg-white dark:bg-dark-card rounded-[2.5rem] border border-slate-100 dark:border-white/5 transition-all shadow-sm hover:border-media-light/30 select-none"
+                            >
+                                <div className="flex items-center gap-6 pointer-events-none">
+                                    <img src={member.image || 'https://via.placeholder.com/150'} className="w-16 h-16 rounded-full object-cover border-2 border-media-light/10" />
+                                    <div>
+                                        <h4 className="font-bold text-lg dark:text-white leading-tight">{member.name}</h4>
+                                        <p className="text-sm font-bold text-media-light uppercase mt-0.5">{member.role}</p>
+                                    </div>
                                 </div>
                                 <div className="flex gap-2">
-                                    <button onClick={() => { setNewMember(member); setEditingMemberId(member.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="px-5 py-2 bg-blue-50 text-blue-500 rounded-xl font-bold text-xs hover:bg-blue-500 hover:text-white transition-all">Düzenle</button>
-                                    <button onClick={() => deleteMember(member.id)} className="px-5 py-2 bg-red-50 text-red-500 rounded-xl font-bold text-xs hover:bg-red-500 hover:text-white transition-all">Sil</button>
+                                    <button onClick={(e) => { e.stopPropagation(); setNewMember(member); setEditingMemberId(member.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="px-5 py-2 bg-blue-50 text-blue-500 rounded-xl font-bold text-xs hover:bg-blue-500 hover:text-white transition-all">Düzenle</button>
+                                    <button onClick={(e) => { e.stopPropagation(); deleteMember(member.id); }} className="px-5 py-2 bg-red-50 text-red-500 rounded-xl font-bold text-xs hover:bg-red-500 hover:text-white transition-all">Sil</button>
                                 </div>
                             </div>
                         ))}

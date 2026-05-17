@@ -1,25 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-// --- FIREBASE BAĞLANTISINI EKLEDİK ---
-import { db } from '../firebase'; // firebase.js src klasöründe olduğu için yol aynı kaldı
-import { collection, getDocs, query, orderBy } from 'firebase/firestore';
+// --- FIREBASE BAĞLANTILARI ---
+import { db } from '../firebase'; // firebase.js dosyanın src altında olduğuna emin ol, yol doğru
+import { collection, getDocs } from 'firebase/firestore';
 
 const Team = () => {
     const [team, setTeam] = useState([]);
 
-    // --- BULUTTAN EKİP VERİLERİNİ ÇEKEN YENİ YAPI ---
+    // --- BULUTTAN EKİP VERİLERİNİ ÇEKEN VE SIRALAYAN YAPI ---
     useEffect(() => {
         const fetchTeam = async () => {
             try {
-                // Ekip üyelerini admin panelinde eklediğimiz oluşturulma tarihine göre sıralı çekiyoruz
-                // 'asc' (A'dan Z'ye/Eskiden Yeniye) seçtik ki ilk eklenen kurucular/başkanlar en üstte dursun
-                const q = query(collection(db, 'team'), orderBy('createdAt', 'asc'));
-                const querySnapshot = await getDocs(q);
+                // Firebase'den tüm ekibi çekiyoruz
+                const querySnapshot = await getDocs(collection(db, 'team'));
 
+                // Gelen üyeleri döküman ID'leriyle eşleyip, admin panelindeki sürükleme sırasına (order) göre diziyoruz
+                // (a.order ?? 0) mantığı: Eğer eski üyelerde henüz order alanı yoksa onları 0 kabul edip listeyi bozmaz
                 const teamList = querySnapshot.docs.map(doc => ({
                     id: doc.id,
                     ...doc.data()
-                }));
+                })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
                 setTeam(teamList);
             } catch (error) {
@@ -49,7 +49,7 @@ const Team = () => {
                     </p>
                 </motion.div>
 
-                {/* Üye Grid Yapısı */}
+                {/* Üye Grid Yapısı - 18+ kişi için optimize edildi */}
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-8 md:gap-12">
                     {team.length === 0 ? (
                         <div className="col-span-full py-20 bg-white dark:bg-dark-card rounded-[3rem] border border-dashed border-slate-200 dark:border-white/10">

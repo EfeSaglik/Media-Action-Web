@@ -1,13 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+// --- FIREBASE BAĞLANTISINI EKLEDİK ---
+import { db } from '../firebase'; // firebase.js src klasöründe olduğu için yol aynı kaldı
+import { collection, getDocs, query, orderBy } from 'firebase/firestore';
 
 const Team = () => {
     const [team, setTeam] = useState([]);
 
-    // Admin panelinden eklenen ve güncellenen verileri çekiyoruz
+    // --- BULUTTAN EKİP VERİLERİNİ ÇEKEN YENİ YAPI ---
     useEffect(() => {
-        const savedTeam = JSON.parse(localStorage.getItem('media_team') || '[]');
-        setTeam(savedTeam);
+        const fetchTeam = async () => {
+            try {
+                // Ekip üyelerini admin panelinde eklediğimiz oluşturulma tarihine göre sıralı çekiyoruz
+                // 'asc' (A'dan Z'ye/Eskiden Yeniye) seçtik ki ilk eklenen kurucular/başkanlar en üstte dursun
+                const q = query(collection(db, 'team'), orderBy('createdAt', 'asc'));
+                const querySnapshot = await getDocs(q);
+
+                const teamList = querySnapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+                setTeam(teamList);
+            } catch (error) {
+                console.error("Ekip verileri buluttan çekilirken hata oluştu:", error);
+            }
+        };
+
+        fetchTeam();
     }, []);
 
     return (
@@ -29,7 +49,7 @@ const Team = () => {
                     </p>
                 </motion.div>
 
-                {/* Üye Grid Yapısı - 18+ kişi için optimize edildi */}
+                {/* Üye Grid Yapısı */}
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-8 md:gap-12">
                     {team.length === 0 ? (
                         <div className="col-span-full py-20 bg-white dark:bg-dark-card rounded-[3rem] border border-dashed border-slate-200 dark:border-white/10">
@@ -90,8 +110,8 @@ const Team = () => {
                                     )}
                                 </div>
                             </motion.div>
-                        )
-                        ))}
+                        ))
+                    )}
                 </div>
             </div>
         </section>

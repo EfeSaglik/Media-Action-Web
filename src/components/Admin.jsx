@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+// --- FIREBASE BAĞLANTISINI EKLEDİK ---
+import { db } from '../firebase'; // Eğer firebase.js ile aynı klasördeyse './firebase' yapabilirsin
+import { collection, addDoc, getDocs, updateDoc, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
 
-// --- YARDIMCI SIKIŞTIRMA FONKSİYONU (Bileşen Dışında Tanımlandı) ---
+// --- RESİM SIKIŞTIRMA MOTORU (Aynen Korundu) ---
 const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.6) => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -14,7 +17,6 @@ const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.6) => 
                 let width = img.width;
                 let height = img.height;
 
-                // En-boy oranını koruyarak maksimum sınırları belirle
                 if (width > height) {
                     if (width > maxWidth) {
                         height = Math.round((height * maxWidth) / width);
@@ -22,7 +24,7 @@ const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.6) => 
                     }
                 } else {
                     if (height > maxHeight) {
-                        width = Math.round((width * maxHeight) / height);
+                        width = Math.round((height * maxHeight) / height);
                         height = maxHeight;
                     }
                 }
@@ -33,7 +35,6 @@ const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.6) => 
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0, width, height);
 
-                // PNG veya ağır formatları hafif JPEG'e dönüştürerek kalitesini ayarla
                 const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
                 resolve(compressedBase64);
             };
@@ -49,7 +50,7 @@ const Admin = () => {
     const [team, setTeam] = useState([]);
     const [apps, setApps] = useState([]);
 
-    // Düzenleme modları
+    // Düzenleme modları (Firestore ID'leri string olduğu için null veya string tutacak)
     const [editingEventId, setEditingEventId] = useState(null);
     const [editingMemberId, setEditingMemberId] = useState(null);
 
@@ -62,79 +63,131 @@ const Admin = () => {
     const [newEvent, setNewEvent] = useState(emptyEvent);
     const [newMember, setNewMember] = useState(emptyMember);
 
+    // --- BULUTTAN VERİLERİ ÇEKEN FONKSİYONLAR ---
+    const fetchFirebaseData = async () => {
+        try {
+            // 1. Etkinlikleri Tarihe Göre Sıralı Çek
+            const eventsQuery = query(collection(db, 'events'), orderBy('createdAt', 'desc'));
+            const eventsSnapshot = await getDocs(eventsQuery);
+            const eventsList = eventsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setEvents(eventsList);
+
+            // 2. Ekip Üyelerini Çek
+            const teamSnapshot = await getDocs(collection(db, 'team'));
+            const teamList = teamSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setTeam(teamList);
+
+            // 3. Başvuruları Çek
+            const appsSnapshot = await getDocs(collection(db, 'applications'));
+            const appsList = appsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setApps(appsList);
+        } catch (error) {
+            console.error("Veriler buluttan yüklenirken hata oluştu:", error);
+        }
+    };
+
     useEffect(() => {
         if (localStorage.getItem('isAdmin') !== 'true') navigate('/login');
-        setEvents(JSON.parse(localStorage.getItem('media_events') || '[]'));
-        setTeam(JSON.parse(localStorage.getItem('media_team') || '[]'));
-        setApps(JSON.parse(localStorage.getItem('media_applications') || '[]'));
+        fetchFirebaseData(); // Sayfa açılınca verileri Firebase'den çekiyoruz
     }, [navigate]);
 
-    // --- FOTOĞRAF YÜKLEME (ASENKRON VE SIKIŞTIRILMIŞ) ---
+    // --- FOTOĞRAF YÜKLEME VE SIKIŞTIRMA (Aynen Korundu) ---
     const handleImageUpload = async (e, target) => {
         const files = Array.from(e.target.files);
-
-        // Çoklu dosya yüklemelerinde sırayla sıkıştırma işlemi yapar
         for (const file of files) {
             try {
-                // Resmi 800x800 ve 0.6 (yani %60 kalite) olacak şekilde sıkıştırıyoruz
                 const compressedBase64 = await compressImage(file, 800, 800, 0.6);
-
                 if (target === 'event') {
                     setNewEvent(prev => ({ ...prev, images: [...prev.images, compressedBase64] }));
                 } else if (target === 'member') {
                     setNewMember(prev => ({ ...prev, image: compressedBase64 }));
                 }
             } catch (error) {
-                console.error("Resim işlenirken ve sıkıştırılırken bir hata oluştu:", error);
+                console.error("Resim sıkıştırılamadı:", error);
             }
         }
     };
 
-    // --- ETKİNLİK YÖNETİMİ ---
-    const saveEvent = (e) => {
+    // --- ETKİNLİK YÖNETİMİ (YENİ ASENKRON FİREBASE YAPISI) ---
+    const saveEvent = async (e) => {
         e.preventDefault();
-        let updatedEvents;
-        if (editingEventId) {
-            updatedEvents = events.map(ev => ev.id === editingEventId ? { ...newEvent, id: editingEventId } : ev);
-            setEditingEventId(null);
-        } else {
-            updatedEvents = [{ ...newEvent, id: Date.now() }, ...events];
+        try {
+            if (editingEventId) {
+                // Güncelleme Modu
+                const eventDocRef = doc(db, 'events', editingEventId);
+                await updateDoc(eventDocRef, newEvent);
+                setEditingEventId(null);
+            } else {
+                // Yeni Ekleme Modu (Oluşturulma tarihini otomatik ekliyoruz)
+                await addDoc(collection(db, 'events'), {
+                    ...newEvent,
+                    createdAt: Date.now()
+                });
+            }
+            setNewEvent(emptyEvent);
+            fetchFirebaseData(); // Listeyi güncelle
+            alert("Etkinlik başarıyla buluta kaydedildi!");
+        } catch (error) {
+            alert("Etkinlik kaydedilirken bir hata oluştu.");
+            console.error(error);
         }
-        setEvents(updatedEvents);
-        localStorage.setItem('media_events', JSON.stringify(updatedEvents));
-        setNewEvent(emptyEvent);
-        alert("Etkinlik başarıyla kaydedildi!");
     };
 
-    const deleteEvent = (id) => {
+    const deleteEvent = async (id) => {
         if (window.confirm("Bu etkinliği silmek istediğine emin misin?")) {
-            const updated = events.filter(ev => ev.id !== id);
-            setEvents(updated);
-            localStorage.setItem('media_events', JSON.stringify(updated));
+            try {
+                await deleteDoc(doc(db, 'events', id));
+                fetchFirebaseData(); // Listeyi güncelle
+            } catch (error) {
+                console.error("Silme hatası:", error);
+            }
         }
     };
 
-    // --- EKİP YÖNETİMİ ---
-    const saveMember = (e) => {
+    // --- EKİP YÖNETİMİ (YENİ ASENKRON FİREBASE YAPISI) ---
+    const saveMember = async (e) => {
         e.preventDefault();
-        let updatedTeam;
-        if (editingMemberId) {
-            updatedTeam = team.map(m => m.id === editingMemberId ? { ...newMember, id: editingMemberId } : m);
-            setEditingMemberId(null);
-        } else {
-            updatedTeam = [{ ...newMember, id: Date.now() }, ...team];
+        try {
+            if (editingMemberId) {
+                // Güncelleme Modu
+                const memberDocRef = doc(db, 'team', editingMemberId);
+                await updateDoc(memberDocRef, newMember);
+                setEditingMemberId(null);
+            } else {
+                // Yeni Ekleme Modu
+                await addDoc(collection(db, 'team'), {
+                    ...newMember,
+                    createdAt: Date.now()
+                });
+            }
+            setNewMember(emptyMember);
+            fetchFirebaseData(); // Listeyi güncelle
+            alert("Ekip üyesi başarıyla buluta kaydedildi!");
+        } catch (error) {
+            alert("Üye kaydedilirken hata oluştu.");
         }
-        setTeam(updatedTeam);
-        localStorage.setItem('media_team', JSON.stringify(updatedTeam));
-        setNewMember(emptyMember);
-        alert("Ekip üyesi başarıyla kaydedildi!");
     };
 
-    const deleteMember = (id) => {
+    const deleteMember = async (id) => {
         if (window.confirm("Bu üyeyi silmek istediğine emin misin?")) {
-            const updated = team.filter(m => m.id !== id);
-            setTeam(updated);
-            localStorage.setItem('media_team', JSON.stringify(updated));
+            try {
+                await deleteDoc(doc(db, 'team', id));
+                fetchFirebaseData();
+            } catch (error) {
+                console.error(error);
+            }
+        }
+    };
+
+    // --- BAŞVURU SİLME ---
+    const deleteApp = async (id) => {
+        if (window.confirm("Bu başvuruyu silmek istediğine emin misin?")) {
+            try {
+                await deleteDoc(doc(db, 'applications', id));
+                fetchFirebaseData();
+            } catch (error) {
+                console.error(error);
+            }
         }
     };
 
@@ -233,7 +286,7 @@ const Admin = () => {
                             <div key={app.id} className="bg-white dark:bg-dark-card p-8 rounded-[2.5rem] border border-slate-100 dark:border-white/5 shadow-sm transition-colors">
                                 <div className="flex justify-between mb-4">
                                     <h4 className="text-2xl font-black dark:text-white transition-colors">{app.name} <span className="text-sm font-normal text-slate-400">({app.email})</span></h4>
-                                    <button onClick={() => { setApps(apps.filter(a => a.id !== app.id)); localStorage.setItem('media_applications', JSON.stringify(apps.filter(a => a.id !== app.id))); }} className="text-red-500 font-bold text-sm hover:underline">Sil</button>
+                                    <button onClick={() => deleteApp(app.id)} className="text-red-500 font-bold text-sm hover:underline">Sil</button>
                                 </div>
                                 <p className="text-slate-600 dark:text-slate-400 italic leading-relaxed transition-colors">"{app.message}"</p>
                                 <p className="text-right text-[10px] text-slate-300 mt-4 font-bold">{app.date}</p>
